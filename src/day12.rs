@@ -95,23 +95,13 @@ struct Key<'a> {
 }
 
 fn is_broken(springs: &[Spring], count: usize) -> bool {
-    if springs.len() < count {
-        return false;
-    }
-    for s in springs.iter().take(count) {
-        if !s.is_maybe_broken() {
-            return false;
-        }
-    }
-    if springs.len() == count {
-        true
-    } else {
-        !springs[count].is_broken()
-    }
+    springs.len() >= count
+        && springs.iter().take(count).all(Spring::is_maybe_broken)
+        && (springs.len() == count || !springs[count].is_broken())
 }
 
 fn is_operational(springs: &[Spring]) -> bool {
-    springs.iter().all(|&s| s.is_maybe_operational())
+    springs.iter().all(Spring::is_maybe_operational)
 }
 
 fn dp<'a>(
@@ -140,9 +130,10 @@ fn dp<'a>(
         };
         total += dp(&springs[offset..], &counts[1..], cache);
     }
-    if springs[0] == Spring::Oper || springs[0] == Spring::Unknown {
+    if springs[0].is_maybe_operational() {
         total += dp(&springs[1..], counts, cache);
     }
+
     cache.insert(key, total);
     total
 }
