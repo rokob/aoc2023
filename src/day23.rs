@@ -3,7 +3,7 @@ use std::collections::{HashMap, HashSet, VecDeque};
 const DATA: &str = include_str!("day23.txt");
 
 pub fn part1() -> Option<()> {
-    let graph = parse(DATA);
+    let graph = parse(DATA, false);
     let to_visit = topo_sort(&graph);
     let mut dists = Vec::new();
     for _ in graph.nodes.keys() {
@@ -21,6 +21,34 @@ pub fn part1() -> Option<()> {
     let result = dists[graph.end.1];
     println!("result = {result}");
     Some(())
+}
+
+pub fn part2() -> Option<()> {
+    let graph = parse(DATA, true);
+    let mut best = 0usize;
+    let mut seen = vec![false; graph.nodes.len()];
+    seen[graph.start.1] = true;
+    find_paths(graph.start.1, 0, &graph, seen.as_mut_slice(), &mut best);
+    println!("result = {best}");
+    Some(())
+}
+
+fn find_paths(node: usize, weight: usize, graph: &Graph, seen: &mut [bool], best: &mut usize) {
+    if node == graph.end.1 {
+        if *best < weight {
+            *best = weight;
+        }
+        return;
+    }
+    let edges = graph.edges.get(&node).unwrap();
+    for e in edges {
+        if seen[e.to] {
+            continue;
+        }
+        seen[e.to] = true;
+        find_paths(e.to, weight + e.weight, graph, seen, best);
+        seen[e.to] = false;
+    }
 }
 
 #[derive(Debug, Copy, Clone, PartialEq, Eq, Hash)]
@@ -64,6 +92,7 @@ struct Graph {
     pos: HashMap<Pos, usize>,
     nodes: HashMap<usize, (Pos, Tile)>,
     edges: HashMap<usize, Vec<Edge>>,
+    grid: Vec<Vec<Tile>>,
 }
 
 fn topo_sort(graph: &Graph) -> Vec<usize> {
@@ -87,7 +116,7 @@ fn process_node(graph: &Graph, node: usize, visited: &mut HashSet<usize>, stack:
     stack.push(node);
 }
 
-fn parse(input: &str) -> Graph {
+fn parse(input: &str, part2: bool) -> Graph {
     let mut nodes = HashMap::new();
     let mut edges = HashMap::new();
     let mut pos = HashMap::new();
@@ -137,27 +166,57 @@ fn parse(input: &str) -> Graph {
         pos,
         nodes,
         edges,
+        grid,
     };
 
-    explore(grid, graph)
+    explore(graph, part2)
 }
 
-fn explore(grid: Vec<Vec<Tile>>, mut graph: Graph) -> Graph {
+fn explore(mut graph: Graph, part2: bool) -> Graph {
     let mut todo = VecDeque::new();
     let mut already = HashSet::new();
     todo.push_back(graph.start);
     already.insert(graph.start);
     while !todo.is_empty() {
         let curr = todo.pop_front().unwrap();
-        let (to, weight, is_end) = find_next(&grid, &graph, curr);
+        let (to, weight, is_end) = find_next(&graph.grid, &graph, curr);
         let e = graph.edges.get_mut(&curr.1).unwrap();
         e.push(Edge { weight, to });
+        if part2 {
+            let q = graph.edges.get_mut(&to).unwrap();
+            q.push(Edge { weight, to: curr.1 });
+        }
         if !is_end {
-            let ns = next_nodes(&grid, &graph, to);
-            let to_edges = graph.edges.get_mut(&to).unwrap();
-            for n in ns.into_iter() {
-                to_edges.push(Edge { weight: 2, to: n.1 });
-                if already.insert(n) {
+            let (uno, ns) = next_nodes(&graph.grid, &graph, to, part2);
+            let weight = if part2 { 1 } else { 2 };
+            let to_idx = if part2 {
+                if graph.pos.contains_key(&uno) {
+                    continue;
+                }
+                let idx = graph.nodes.len();
+                graph.nodes.insert(idx, (uno, Tile::Path));
+                graph.edges.insert(idx, vec![Edge { weight, to }]);
+                graph.pos.insert(uno, idx);
+                let to_edges = graph.edges.get_mut(&to).unwrap();
+                to_edges.push(Edge { weight, to: idx });
+                idx
+            } else {
+                to
+            };
+            for (n, should_explore) in ns.into_iter() {
+                graph
+                    .edges
+                    .get_mut(&to_idx)
+                    .unwrap()
+                    .push(Edge { weight, to: n.1 });
+                if part2 {
+                    graph
+                        .edges
+                        .get_mut(&n.1)
+                        .unwrap()
+                        .push(Edge { weight, to: to_idx });
+                }
+                if should_explore && already.insert(n) {
                     todo.push_back(n);
                 }
             }
@@ -207,41 +266,61 @@ fn get_neighbor(grid: &Vec<Vec<Tile>>, curr: Pos, last: Pos) -> Pos {
     panic!("bad graph: curr={curr:?}, last={last:?}");
 }
 
-fn next_nodes(grid: &Vec<Vec<Tile>>, graph: &Graph, from: usize) -> Vec<(Pos, usize)> {
+fn next_nodes(
+    grid: &Vec<Vec<Tile>>,
+    graph: &Graph,
+    from: usize,
+    part2: bool,
+) -> (Pos, Vec<((Pos, usize), bool)>) {
     let (pos, tile) = graph.nodes.get(&from).unwrap();
-    let holes = match tile {
-        Tile::Up => [
-            ((pos.0 - 1, pos.1 + 1), Tile::Right),
-            ((pos.0 - 1, pos.1 - 1), Tile::Left),
-            ((pos.0 - 2, pos.1), Tile::Up),
-        ],
-        Tile::Down => [
-            ((pos.0 + 1, pos.1 + 1), Tile::Right),
-            ((pos.0 + 1, pos.1 - 1), Tile::Left),
-            ((pos.0 + 2, pos.1), Tile::Down),
-        ],
-        Tile::Right => [
-            ((pos.0 + 1, pos.1 + 1), Tile::Down),
-            ((pos.0 - 1, pos.1 + 1), Tile::Up),
-            ((pos.0, pos.1 + 2), Tile::Right),
-        ],
-        Tile::Left => [
-            ((pos.0 + 1, pos.1 - 1), Tile::Down),
-            ((pos.0 - 1, pos.1 - 1), Tile::Up),
-            ((pos.0, pos.1 - 2), Tile::Left),
-        ],
+    let (uno, holes) = match tile {
+        Tile::Up => (
+            (pos.0 - 1, pos.1),
+            [
+                ((pos.0 - 1, pos.1 + 1), Tile::Right),
+                ((pos.0 - 1, pos.1 - 1), Tile::Left),
+                ((pos.0 - 2, pos.1), Tile::Up),
+            ],
+        ),
+        Tile::Down => (
+            (pos.0 + 1, pos.1),
+            [
+                ((pos.0 + 1, pos.1 + 1), Tile::Right),
+                ((pos.0 + 1, pos.1 - 1), Tile::Left),
+                ((pos.0 + 2, pos.1), Tile::Down),
+            ],
+        ),
+        Tile::Right => (
+            (pos.0, pos.1 + 1),
+            [
+                ((pos.0 + 1, pos.1 + 1), Tile::Down),
+                ((pos.0 - 1, pos.1 + 1), Tile::Up),
+                ((pos.0, pos.1 + 2), Tile::Right),
+            ],
+        ),
+        Tile::Left => (
+            (pos.0, pos.1 - 1),
+            [
+                ((pos.0 + 1, pos.1 - 1), Tile::Down),
+                ((pos.0 - 1, pos.1 - 1), Tile::Up),
+                ((pos.0, pos.1 - 2), Tile::Left),
+            ],
+        ),
         _ => panic!("bad tile"),
     };
-    holes
-        .into_iter()
-        .filter_map(|(p, ok)| {
-            let t = grid[p.0][p.1];
-            if t == ok || graph.end.0 == p {
-                let i = graph.pos.get(&p).unwrap();
-                Some((p, *i))
-            } else {
-                None
-            }
-        })
-        .collect()
+    (
+        uno,
+        holes
+            .into_iter()
+            .filter_map(|(p, ok)| {
+                let t = grid[p.0][p.1];
+                if (part2 && t.is_node()) || t == ok || graph.end.0 == p {
+                    let i = graph.pos.get(&p).unwrap();
+                    Some(((p, *i), t == ok))
+                } else {
+                    None
+                }
+            })
+            .collect(),
+    )
 }
